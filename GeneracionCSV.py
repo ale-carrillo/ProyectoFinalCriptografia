@@ -22,7 +22,7 @@ def register_public_key(pem_key: str) -> int:
         writer = csv.writer(file)
         new_id = get_next_id()
         writer.writerow([new_id, pem_key])
-        return new_id
+        return new_id 
         
 def get_next_id() -> int:
     if not os.path.exists(CSV_FILE):
