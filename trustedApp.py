@@ -1,93 +1,85 @@
 import socket
 import threading
+import json
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
+from helper_functions import *
 
 host = "127.0.0.1"
-smartDevicePort = 65002
-trustedAppPort = 65001
-raPort = 65000
+ra_port = 65000
+trusted_app_port = 65001
 
-# Creación de socket
-def serverSocketCreation():
-    serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    serverSocket.bind((host, trustedAppPort))
-    serverSocket.listen()
-    return serverSocket
-
-def clientConnection(clientSocket, address):
+def handle_smart_device(client_socket, private_key, public_key, trusted_app_id):
     try:
-        # Conexión con el Smart Device
-        print(f"[NEW CONNECTION] From {address}")
+        data = client_socket.recv(8192).decode()
+        request = json.loads(data)
+        smart_device_id = request.get("id")
+        smart_device_public_pem = request.get("public_key")
 
-        # Solicitud inicial para conexión
-        data = clientSocket.recv(1024).decode()
-        print(f"[RECEIVED] {data}")
-        # Responde al dispositivo aceptando la solicitud
-        response = "Trusted Application: Communication request received"
-        clientSocket.sendall(response.encode())
+        ra_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        ra_socket.connect((host, ra_port))
+        ra_socket.sendall(smart_device_id.encode())
+        smart_device_public_from_ra = ra_socket.recv(8192).decode()
+        ra_socket.close()
+        if "ERROR" in smart_device_public_from_ra or smart_device_public_from_ra != smart_device_public_pem:
+            client_socket.sendall(b"ERROR: Smart Device no autenticado")
+            print("[TrustedApp] Smart Device no autenticado")
+            client_socket.close()
+            return
 
-        raSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        raSocket.connect((host, smartDevicePort)) # raPort?
-        print(f"[SOCKET CONNECTION] Connected to RA")
+        ta_pub_pem = public_key.public_bytes(
+            encoding=serialization.Encoding.PEM,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo
+        ).decode()
 
-        # 1
-        message = "Trusted Application: Validation request"
-        raSocket.sendall(message.encode())
+        resp = json.dumps({"id": trusted_app_id, "public_key": ta_pub_pem})
+        client_socket.sendall(resp.encode())
 
-        # 2
-        raResponse = raSocket.recv(1024).decode()
-        print(f"[RECEIVED] {raResponse}")
+        smart_device_public_key = load_pem_public_key(smart_device_public_pem.encode())
+        shared_key = derive_shared_key(private_key, smart_device_public_key)
+        print("[TrustedApp] Llave compartida derivada con Smart Device.")
 
-        # Socket conexión to RA
-        raSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        raSocket.connect((host, raPort))
-        print(f"[SOCKET CONNECTION] Connected to RA")
+        data_enc = client_socket.recv(1024)
+        nonce = data_enc[:12]
+        ciphertext = data_enc[12:]
+        plaintext = decrypt_message(shared_key, nonce, ciphertext)
+        print("[TrustedApp] Mensaje recibido:", plaintext)
 
-        response = f"{raResponse}"
-        raSocket.sendall(response.encode())
-        
-        
+        nonce_resp, ciphertext_resp = encrypt_message(shared_key, "Hola Smart Device, mensaje cifrado desde Trusted Server")
+        client_socket.sendall(nonce_resp + ciphertext_resp)
 
-        raSocket.close()
-
-        raResponse = raSocket.recv(1024).decode()
-        print(f"[RECEIVED] {raResponse}")
-
-        raSocket.close()
-        print(f"[CONNECTION END] RA socket has been closed")
-
-        response = "Trusted Application: Communication request accepted"
-        clientSocket.sendall(response.encode())
-
-        response = clientSocket.recv(1024).decode()
-        print(f"[RECEIVED] {response}") 
-
-        message = "Trusted Application: Encrypted message"
-        clientSocket.sendall(message.encode())
-        
     except Exception as e:
-        print(f"[ERROR] {e}")
-
+        print(f"[TrustedApp ERROR] {e}")
     finally:
-        clientSocket.close()
-        print(f"[CONNECTION END] Client socket has been closed")
+        client_socket.close()
 
 def main():
-    serverSocket = serverSocketCreation()
-    print(f"[SOCKET CREATION] Trusted Application is up")
+    private_key, public_key = generate_key_pair()
+    
+    ra_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    ra_socket.connect((host, ra_port))
+    pem = public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    ).decode()
+    ra_socket.sendall(json.dumps({"public_key": pem}).encode())
+    trusted_app_id = ra_socket.recv(1024).decode()
+    ra_socket.close()
+    print(f"[TrustedApp] Registrado con ID: {trusted_app_id}")
+
+    server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server.bind((host, trusted_app_port))
+    server.listen()
+    print(f"[TrustedApp] Escuchando conexiones en {host}:{trusted_app_port}")
 
     try:
         while True:
-            clientSocket, address = serverSocket.accept()
-            clientThread = threading.Thread(target = clientConnection, args = (clientSocket, address))
-            clientThread.daemon = True
-            clientThread.start()
-
+            client_socket, addr = server.accept()
+            threading.Thread(target=handle_smart_device, args=(client_socket, private_key, public_key, trusted_app_id), daemon=True).start()
     except KeyboardInterrupt:
-        print(f"[SOCKET CLOSE] Trusted Application is down")
-
+        print("\n[TrustedApp] Servidor detenido")
     finally:
-        serverSocket.close()
-        print(f"[SOCKET CLOSE] Trusted Application socket has been closed")
+        server.close()
 
 if __name__ == "__main__":
     main()
