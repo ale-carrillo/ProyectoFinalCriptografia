@@ -1,64 +1,57 @@
 import socket
-from cryptography.hazmat.primitives import serialization
-from helper_functions import *
 import json
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
+from helper_functions import *
 
 host = "127.0.0.1"
-smartDevicePort = 65002
-trustedAppPort = 65001
-raPort = 65000
+ra_port = 65000
+trusted_app_port = 65001
 
 def main():
-    # Genera par de claves, privada y publica del dispositivo
-    client_private_key, client_public_key = generate_key_pair()
-    print(client_public_key)
-
-    #Coneccion al RA
-    raSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    raSocket.connect((host, raPort))
-    print(f"[SOCKET CONNECTION] Connected to RA")
-
-    #Envio de llave al RA para registrarse
-    public_key_pem = client_public_key.public_bytes(encoding=serialization.Encoding.PEM,format=serialization.PublicFormat.SubjectPublicKeyInfo)
-    raSocket.sendall(public_key_pem)
-
-    # Espera a que el RA le responda con su ID
-    response = raSocket.recv(1024).decode()
-    print(f"[RECEIVED] Id = {response}")
-    raSocket.close()
-    print(f"[CONNECTION END] RA socket has been closed")
-
-    # Se conecta al Trusted App
-    ''' Conexión Cliente - Servidor '''
-    trustedAppSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    trustedAppSocket.connect((host, trustedAppPort))
-    print(f"[SOCKET CONNECTION] Connected to Trusted Application")
-
-    # 1 Mensaje de solicitud de comunicación
-    message = "Smart Device: Communication request"
-    trustedAppSocket.send(message.encode())
-
-    # Recibe confirmación del Trusted App
-    response = trustedAppSocket.recv(1024).decode()
-    print(f"[RECEIVED] {response}")
-
-    # 2 
-    request = {
-        'ID': id,
-        'public_key': public_key_pem
-    }
-    request_bytes = json.dumps(request).encode('utf-8')
-    trustedAppSocket.sendall(request_bytes)
-    print(f"[RECEIVED] {response}")
+    private_key, public_key = generate_key_pair()
     
-    message = "Smart Device: Encrypted message"
-    trustedAppSocket.send(message.encode())
+    ra_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    ra_socket.connect((host, ra_port))
+    pem = public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    ).decode()
+    ra_socket.sendall(json.dumps({"public_key": pem}).encode())
+    client_id = ra_socket.recv(1024).decode()
+    ra_socket.close()
+    print(f"[SmartDevice] Registered with ID: {client_id}")
 
-    response = trustedAppSocket.recv(1024).decode()
-    print(f"[RECEIVED] {response}")
-    
-    trustedAppSocket.close()
-    print(f"[CONNECTION END] Trusted Application socket has been closed")
+    trusted_app_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    trusted_app_socket.connect((host, trusted_app_port))
+
+    pub_pem = public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    ).decode()
+    data = json.dumps({"id": client_id, "public_key": pub_pem})
+    trusted_app_socket.sendall(data.encode())
+
+    response = trusted_app_socket.recv(8192).decode()
+    resp_json = json.loads(response)
+    ts_id = resp_json["id"]
+    ts_pub_pem = resp_json["public_key"]
+
+    ts_pub_key = load_pem_public_key(ts_pub_pem.encode())
+
+    shared_key = derive_shared_key(private_key, ts_pub_key)
+    print("[SmartDevice] Shared key derived with Trusted Server.")
+
+    nonce, ciphertext = encrypt_message(shared_key, "Hello Trusted Server, encrypted message from Smart Device")
+    trusted_app_socket.sendall(nonce + ciphertext)
+
+    recv = trusted_app_socket.recv(1024)
+    nonce_r = recv[:12]
+    ciphertext_r = recv[12:]
+    plaintext = decrypt_message(shared_key, nonce_r, ciphertext_r)
+    print("[SmartDevice] Message received from Trusted Server:", plaintext)
+
+    trusted_app_socket.close()
 
 if __name__ == "__main__":
     main()
