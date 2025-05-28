@@ -2,9 +2,11 @@ import socket
 import threading
 
 host = "127.0.0.1"
+smartDevicePort = 65002
 trustedAppPort = 65001
 raPort = 65000
 
+# Creación de socket
 def serverSocketCreation():
     serverSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     serverSocket.bind((host, trustedAppPort))
@@ -13,22 +15,39 @@ def serverSocketCreation():
 
 def clientConnection(clientSocket, address):
     try:
+        # Conexión con el Smart Device
         print(f"[NEW CONNECTION] From {address}")
+
+        # Solicitud inicial para conexión
         data = clientSocket.recv(1024).decode()
         print(f"[RECEIVED] {data}")
-
+        # Responde al dispositivo aceptando la solicitud
         response = "Trusted Application: Communication request received"
         clientSocket.sendall(response.encode())
 
         raSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        raSocket.connect((host, raPort))
+        raSocket.connect((host, smartDevicePort)) # raPort?
         print(f"[SOCKET CONNECTION] Connected to RA")
 
+        # 1
         message = "Trusted Application: Validation request"
         raSocket.sendall(message.encode())
 
+        # 2
         raResponse = raSocket.recv(1024).decode()
         print(f"[RECEIVED] {raResponse}")
+
+        # Socket conexión to RA
+        raSocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        raSocket.connect((host, raPort))
+        print(f"[SOCKET CONNECTION] Connected to RA")
+
+        response = f"{raResponse}"
+        raSocket.sendall(response.encode())
+        
+        
+
+        raSocket.close()
 
         raResponse = raSocket.recv(1024).decode()
         print(f"[RECEIVED] {raResponse}")
