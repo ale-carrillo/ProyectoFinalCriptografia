@@ -2,17 +2,15 @@ import socket
 import json
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
-from helper_functions import *
+from helper_functions import generate_key_pair, derive_shared_key, encrypt_message, decrypt_message
 
 host = "127.0.0.1"
-ra_port = 65000
-trusted_app_port = 65001
+raPort = 65000
+trustedAppPort = 65001
 
-def main():
-    private_key, public_key = generate_key_pair()
-    
+def register_to_ra(public_key):
     ra_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    ra_socket.connect((host, ra_port))
+    ra_socket.connect((host, raPort))
     pem = public_key.public_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PublicFormat.SubjectPublicKeyInfo
@@ -20,38 +18,67 @@ def main():
     ra_socket.sendall(json.dumps({"public_key": pem}).encode())
     client_id = ra_socket.recv(1024).decode()
     ra_socket.close()
-    print(f"[SmartDevice] Registered with ID: {client_id}")
+    print(f"[SmartDevice] Registrado con ID: {client_id}")
+    return client_id
 
-    trusted_app_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    trusted_app_socket.connect((host, trusted_app_port))
+def query_ra_for_key(trusted_app_id):
+    ra_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    ra_socket.connect((host, raPort))
+    ra_socket.sendall(trusted_app_id.encode())
+    public_key_pem = ra_socket.recv(8192).decode()
+    ra_socket.close()
+    return public_key_pem
 
+def connect_to_trusted_app(client_id, private_key, public_key):
+    ts_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    ts_socket.connect((host, trustedAppPort))
+
+    # Enviar JSON con id + llave pública PEM
     pub_pem = public_key.public_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PublicFormat.SubjectPublicKeyInfo
     ).decode()
     data = json.dumps({"id": client_id, "public_key": pub_pem})
-    trusted_app_socket.sendall(data.encode())
+    ts_socket.sendall(data.encode())
 
-    response = trusted_app_socket.recv(8192).decode()
+    # Recibir JSON con id + llave pública Trusted Server
+    response = ts_socket.recv(8192).decode()
     resp_json = json.loads(response)
     ts_id = resp_json["id"]
     ts_pub_pem = resp_json["public_key"]
 
+    # Validar con RA
+    ta_pub_from_ra = query_ra_for_key(ts_id)
+    if "ERROR" in ta_pub_from_ra or ta_pub_from_ra != ts_pub_pem:
+        ts_socket.sendall(b"ERROR: Trusted Server no autenticado")
+        print("[SmartDevice] Trusted Server no autenticado")
+        ts_socket.close()
+        return
+
+    # Cargar la llave pública del Trusted Server
     ts_pub_key = load_pem_public_key(ts_pub_pem.encode())
 
+    # Derivar llave compartida
     shared_key = derive_shared_key(private_key, ts_pub_key)
-    print("[SmartDevice] Shared key derived with Trusted Server.")
+    print("[SmartDevice] Llave compartida derivada con Trusted Server.")
 
-    nonce, ciphertext = encrypt_message(shared_key, "Hello Trusted Server, encrypted message from Smart Device")
-    trusted_app_socket.sendall(nonce + ciphertext)
+    # Comunicación cifrada de prueba
+    nonce, ciphertext = encrypt_message(shared_key, "Hola Trusted Server, mensaje cifrado desde Smart Device")
+    ts_socket.sendall(nonce + ciphertext)  # Enviar nonce + ciphertext concatenados
 
-    recv = trusted_app_socket.recv(1024)
+    # Recibir respuesta cifrada
+    recv = ts_socket.recv(1024)
     nonce_r = recv[:12]
     ciphertext_r = recv[12:]
     plaintext = decrypt_message(shared_key, nonce_r, ciphertext_r)
-    print("[SmartDevice] Message received from Trusted Server:", plaintext)
+    print("[SmartDevice] Mensaje cifrado del TrustedApp: ", ciphertext, "Mensaje descifrado con llave derivada:", plaintext)
 
-    trusted_app_socket.close()
+    ts_socket.close()
+
+def main():
+    private_key, public_key = generate_key_pair()
+    client_id = register_to_ra(public_key)
+    connect_to_trusted_app(client_id, private_key, public_key)
 
 if __name__ == "__main__":
     main()
