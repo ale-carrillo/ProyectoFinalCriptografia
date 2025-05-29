@@ -5,7 +5,7 @@ import os
 import uuid
 
 host = "127.0.0.1"
-ra_port = 65000
+raPort = 65000
 clients_file = "clients.json"
 
 def load_clients():
@@ -15,25 +15,34 @@ def load_clients():
     with open(clients_file, "r") as f:
         return json.load(f)
 
+def save_clients(clients):
+    with open(clients_file, "w") as f:
+        json.dump(clients, f, indent=4)
+
+def register_public_key(pem_key):
+    clients = load_clients()
+    client_id = str(uuid.uuid4())
+    clients[client_id] = pem_key
+    save_clients(clients)
+    return client_id
+
 def handle_client(client_socket, addr):
     try:
         data = client_socket.recv(8192).decode()
 
         try:
             request = json.loads(data)
+            # Registro: JSON con "public_key"
             if isinstance(request, dict) and "public_key" in request:
                 pem_key = request["public_key"]
-                clients = load_clients()
-                client_id = str(uuid.uuid4())
-                clients[client_id] = pem_key
-                with open(clients_file, "w") as f:
-                    json.dump(clients, f, indent=4)
+                client_id = register_public_key(pem_key)
                 client_socket.sendall(client_id.encode())
                 print(f"[RA] Registrado cliente con ID: {client_id}")
                 return
         except Exception:
             pass
 
+        # Consulta: id plano
         client_id = data.strip()
         clients = load_clients()
         if client_id in clients:
@@ -52,9 +61,9 @@ def handle_client(client_socket, addr):
 
 def main():
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind((host, ra_port))
+    server.bind((host, raPort))
     server.listen()
-    print(f"[RA] Servidor escuchando en {host}:{ra_port}")
+    print(f"[RA] Servidor escuchando en {host}:{raPort}")
 
     try:
         while True:
