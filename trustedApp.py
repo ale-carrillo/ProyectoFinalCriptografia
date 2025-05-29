@@ -3,30 +3,33 @@ import threading
 import json
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
-from helper_functions import *
+from helper_functions import generate_key_pair, derive_shared_key, encrypt_message, decrypt_message
 
 host = "127.0.0.1"
-ra_port = 65000
-trusted_app_port = 65001
+raPort = 65000
+trustedAppPort = 65001
+
+def register_to_ra(public_key):
+    ra_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    ra_socket.connect((host, raPort))
+    pem = public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    ).decode()
+    ra_socket.sendall(json.dumps({"public_key": pem}).encode())
+    trusted_app_id = ra_socket.recv(1024).decode()
+    ra_socket.close()
+    print(f"[TrustedApp] Registrado con ID: {trusted_app_id}")
+    return trusted_app_id
 
 def handle_smart_device(client_socket, private_key, public_key, trusted_app_id):
     try:
         data = client_socket.recv(8192).decode()
         request = json.loads(data)
-        smart_device_id = request.get("id")
-        smart_device_public_pem = request.get("public_key")
+        sd_id = request.get("id")
+        sd_pub_pem = request.get("public_key")
 
-        ra_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        ra_socket.connect((host, ra_port))
-        ra_socket.sendall(smart_device_id.encode())
-        smart_device_public_from_ra = ra_socket.recv(8192).decode()
-        ra_socket.close()
-        if "ERROR" in smart_device_public_from_ra or smart_device_public_from_ra != smart_device_public_pem:
-            client_socket.sendall(b"ERROR: Smart Device no autenticado")
-            print("[TrustedApp] Smart Device no autenticado")
-            client_socket.close()
-            return
-
+        # Enviar id y llave pública Trusted App al Smart Device
         ta_pub_pem = public_key.public_bytes(
             encoding=serialization.Encoding.PEM,
             format=serialization.PublicFormat.SubjectPublicKeyInfo
@@ -35,16 +38,19 @@ def handle_smart_device(client_socket, private_key, public_key, trusted_app_id):
         resp = json.dumps({"id": trusted_app_id, "public_key": ta_pub_pem})
         client_socket.sendall(resp.encode())
 
-        smart_device_public_key = load_pem_public_key(smart_device_public_pem.encode())
-        shared_key = derive_shared_key(private_key, smart_device_public_key)
+        # Derivar llave compartida
+        sd_pub_key = load_pem_public_key(sd_pub_pem.encode())
+        shared_key = derive_shared_key(private_key, sd_pub_key)
         print("[TrustedApp] Llave compartida derivada con Smart Device.")
 
+        # Recibir mensaje cifrado (nonce + ciphertext)
         data_enc = client_socket.recv(1024)
         nonce = data_enc[:12]
         ciphertext = data_enc[12:]
         plaintext = decrypt_message(shared_key, nonce, ciphertext)
-        print("[TrustedApp] Mensaje recibido:", plaintext)
+        print("[TrustedApp] Mensaje cifrado del SmartDevice: ", ciphertext, "Mensaje descifrado con llave derivada:", plaintext)
 
+        # Responder cifrado
         nonce_resp, ciphertext_resp = encrypt_message(shared_key, "Hola Smart Device, mensaje cifrado desde Trusted Server")
         client_socket.sendall(nonce_resp + ciphertext_resp)
 
@@ -55,22 +61,12 @@ def handle_smart_device(client_socket, private_key, public_key, trusted_app_id):
 
 def main():
     private_key, public_key = generate_key_pair()
-    
-    ra_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    ra_socket.connect((host, ra_port))
-    pem = public_key.public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo
-    ).decode()
-    ra_socket.sendall(json.dumps({"public_key": pem}).encode())
-    trusted_app_id = ra_socket.recv(1024).decode()
-    ra_socket.close()
-    print(f"[TrustedApp] Registrado con ID: {trusted_app_id}")
+    trusted_app_id = register_to_ra(public_key)
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    server.bind((host, trusted_app_port))
+    server.bind((host, trustedAppPort))
     server.listen()
-    print(f"[TrustedApp] Escuchando conexiones en {host}:{trusted_app_port}")
+    print(f"[TrustedApp] Escuchando conexiones en {host}:{trustedAppPort}")
 
     try:
         while True:
