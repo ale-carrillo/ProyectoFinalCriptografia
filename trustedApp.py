@@ -22,12 +22,28 @@ def register_to_ra(public_key):
     print(f"[TrustedApp] Registrado con ID: {trusted_app_id}")
     return trusted_app_id
 
+def query_ra_for_key(smart_device_id):
+    ra_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    ra_socket.connect((host, raPort))
+    ra_socket.sendall(smart_device_id.encode())
+    public_key_pem = ra_socket.recv(8192).decode()
+    ra_socket.close()
+    return public_key_pem
+
 def handle_smart_device(client_socket, private_key, public_key, trusted_app_id):
     try:
         data = client_socket.recv(8192).decode()
         request = json.loads(data)
         sd_id = request.get("id")
         sd_pub_pem = request.get("public_key")
+
+        # Validar con RA
+        sd_pub_from_ra = query_ra_for_key(sd_id)
+        if "ERROR" in sd_pub_from_ra or sd_pub_from_ra != sd_pub_pem:
+            client_socket.sendall(b"ERROR: Smart Device no autenticado")
+            print("[TrustedApp] Smart Device no autenticado")
+            client_socket.close()
+            return
 
         # Enviar id y llave pública Trusted App al Smart Device
         ta_pub_pem = public_key.public_bytes(
