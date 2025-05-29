@@ -1,6 +1,8 @@
 import socket
 import threading
 import json
+import time
+import struct
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.serialization import load_pem_public_key
 from helper_functions import generate_key_pair, derive_shared_key, encrypt_message, decrypt_message
@@ -62,13 +64,27 @@ def handle_smart_device(client_socket, private_key, public_key, trusted_app_id):
         # Recibir mensaje cifrado (nonce + ciphertext)
         data_enc = client_socket.recv(1024)
         nonce = data_enc[:12]
-        ciphertext = data_enc[12:]
-        plaintext = decrypt_message(shared_key, nonce, ciphertext)
-        print("[TrustedApp] Mensaje cifrado del SmartDevice: ", ciphertext, "Mensaje descifrado con llave derivada:", plaintext)
+        timestamp = data_enc[12:20]
+        ciphertext = data_enc[20:]
+
+        # Validación timestamp
+        sDTime = struct.unpack("d", timestamp)[0]
+        now = time.time()
+        if abs(now - sDTime) > 30:
+            client_socket.sendall(b"ERROR: Smart Device, mensaje rechazado por posible replay attack")
+            print("[TrustedServer] Posible replay attack")
+            client_socket.close()
+            return
+
+        decrypted = decrypt_message(shared_key, nonce, ciphertext)
+        
+        print("[TrustedServer] Mensaje cifrado del SmartDevice:", ciphertext)
+        print("[TrustedServer] Mensaje descifrado con llave derivada:", decrypted)
 
         # Responder cifrado
-        nonce_resp, ciphertext_resp = encrypt_message(shared_key, "Hola Smart Device, mensaje cifrado desde Trusted Server")
-        client_socket.sendall(nonce_resp + ciphertext_resp)
+        timestamp_resp = struct.pack("d", time.time())
+        nonce_resp, ciphertext_resp = encrypt_message(shared_key, "Hola SD este es un mensaje cifrado como respuesta desde el TS")
+        client_socket.sendall(nonce_resp + timestamp_resp + ciphertext_resp)
 
     except Exception as e:
         print(f"[TrustedApp ERROR] {e}")
