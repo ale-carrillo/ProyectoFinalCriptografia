@@ -84,6 +84,7 @@ def handle_smart_device(client_socket, private_key, public_key, trusted_app_id):
         # Responder cifrado
         timestamp_resp = struct.pack("d", time.time())
         nonce_resp, ciphertext_resp = encrypt_message(shared_key, "Hola SD este es un mensaje cifrado como respuesta desde el TS")
+        print("[TrustedServer] Respuesta enviada al SmartDevice: Hola SD este es un mensaje cifrado como respuesta desde el TS")
         client_socket.sendall(nonce_resp + timestamp_resp + ciphertext_resp)
 
     except Exception as e:
@@ -111,3 +112,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
