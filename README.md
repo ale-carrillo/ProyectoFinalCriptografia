@@ -25,6 +25,12 @@ venv\Scripts\activate
 pip install -r requirements.txt
 python run_all.py --sistema windows
 ```
+En caso de obtener un error al tratar de ejecutar el script activate, utilice los siguientes comandos:
+```bash
+Set-ExecutionPolicy -ExecutionPolicy Bypass -Scope Process
+.\venv\Scripts\activate
+```
+
 
 #### Para Linux y macOS:
 ```bash
