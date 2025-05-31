@@ -67,6 +67,7 @@ def connect_to_trusted_app(client_id, private_key, public_key):
     # Comunicación cifrada de prueba
     timestamp = struct.pack("d", time.time())
     nonce, ciphertext = encrypt_message(shared_key, "Hola TS este es un mensaje cifrado desde el SD")
+    print("[SmartDevice] Mensaje enviado al Trusted Server: Hola TS este es un mensaje cifrado desde el SD")
     ts_socket.sendall(nonce + timestamp + ciphertext)
 
 
@@ -96,6 +97,10 @@ def main():
     private_key, public_key = generate_key_pair()
     client_id = register_to_ra(public_key)
     connect_to_trusted_app(client_id, private_key, public_key)
+
+if __name__ == "__main__":
+    main()
+
 
 if __name__ == "__main__":
     main()
